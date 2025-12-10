@@ -1,0 +1,3 @@
+.env/
+model/keypoint_classifier/keypoint.csv
+model/point_history_classifier/point_history.csv
