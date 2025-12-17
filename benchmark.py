@@ -65,8 +65,8 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
                             min_detection_confidence=0.7,
                             min_tracking_confidence=0.5)
 
-    keypoint_classifier = KeyPointClassifier()
-    point_history_classifier = PointHistoryClassifier()
+    keypoint_classifier = KeyPointClassifier(model_path="model/keypoint_classifier/keypoint_classifier.onnx")
+    point_history_classifier = PointHistoryClassifier(model_path="model/point_history_classifier/point_history_classifier.onnx")
 
     with open('model/keypoint_classifier/keypoint_classifier_label.csv', encoding='utf-8-sig') as f:
         key_labels = [row[0] for row in csv.reader(f)]
