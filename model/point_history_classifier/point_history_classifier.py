@@ -1,54 +1,80 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-import os
+
+import onnxruntime
 import numpy as np
-import tensorflow as tf
-import onnxruntime as ort
+from typing import (
+    Optional,
+    List,
+)
+import tensorflow.lite as tflite
 
 class PointHistoryClassifier(object):
     def __init__(
         self,
         model_path='model/point_history_classifier/point_history_classifier.tflite',
         score_th=0.5,
-        invalid_value=0,
         num_threads=1,
     ):
-        self.score_th = score_th
-        self.invalid_value = invalid_value
         self.model_path = model_path
-        self.model_ext = os.path.splitext(model_path)[-1].lower()
+        self.score_th = score_th
+        self.use_onnx = model_path.endswith('.onnx')
 
-        if self.model_ext == '.tflite':
-            self.backend = 'tflite'
-            self.interpreter = tf.lite.Interpreter(model_path=model_path,
-                                                   num_threads=num_threads)
+        if self.use_onnx:
+            import onnxruntime
+            session_option = onnxruntime.SessionOptions()
+            session_option.log_severity_level = 3
+            self.onnx_session = onnxruntime.InferenceSession(
+                model_path,
+                sess_options=session_option,
+                providers=['CPUExecutionProvider'],
+            )
+            self.input_names = [input.name for input in self.onnx_session.get_inputs()]
+            self.output_names = [output.name for output in self.onnx_session.get_outputs()]
+        else:
+            self.interpreter = tflite.Interpreter(model_path=model_path, num_threads=num_threads)
             self.interpreter.allocate_tensors()
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
-        elif self.model_ext == '.onnx':
-            self.backend = 'onnx'
-            self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
-            self.input_name = self.session.get_inputs()[0].name
-        else:
-            raise ValueError(f"Unsupported model type: {self.model_ext}")
 
-    def __call__(self, point_history):
-        if self.backend == 'tflite':
+    def __call__(
+        self,
+        point_history,
+    ):
+        # Ensure input is float32 and correct shape
+        input_data = np.array([point_history], dtype=np.float32)
+
+        if self.use_onnx:
+            # ONNX Inference (Requires score_th as 2nd input)
+            score_th_input = np.array(self.score_th, dtype=np.float32)
+            
+            result = self.onnx_session.run(
+                self.output_names,
+                {
+                    self.input_names[0]: input_data,
+                    self.input_names[1]: score_th_input,
+                },
+            )[0]
+            
+            # The ONNX model typically returns just the ID if it has ArgMax baked in
+            result = np.squeeze(result)
+            
+            # Check if result looks like an ID (integer) or scores (floats)
+            if result.size == 1 and (result.dtype == np.int64 or result.dtype == np.int32):
+                return int(result), None
+            else:
+                return int(np.argmax(result)), None
+                
+        else:
+            # TFLite Inference
             input_details_tensor_index = self.input_details[0]['index']
-            self.interpreter.set_tensor(
-                input_details_tensor_index,
-                np.array([point_history], dtype=np.float32))
+            self.interpreter.set_tensor(input_details_tensor_index, input_data)
             self.interpreter.invoke()
+
             output_details_tensor_index = self.output_details[0]['index']
             result = self.interpreter.get_tensor(output_details_tensor_index)
-        elif self.backend == 'onnx':
-            result = self.session.run(
-                None,
-                {self.input_name: np.array([point_history], dtype=np.float32)}
-            )[0]
 
-        result_index = np.argmax(np.squeeze(result))
-        if np.squeeze(result)[result_index] < self.score_th:
-            result_index = self.invalid_value
+            result = np.squeeze(result)
+            result_index = np.argmax(result)
+            confidence = float(np.max(result))
 
-        return result_index
+            return result_index, confidence
