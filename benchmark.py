@@ -15,8 +15,35 @@ from model import PointHistoryClassifier
 from model import PalmDetection
 from model import HandLandmark
 
-KEYPOINT_MODEL_PATH = "model/keypoint_classifier/keypoint_classifier.tflite"
-POINTHISTORY_MODEL_PATH = "model/point_history_classifier/point_history_classifier.tflite" 
+
+# Keypoint Classifier Model Selection
+KEYPOINT_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+
+# Point History Classifier Model Selection
+POINT_HISTORY_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+
+# Model path builder
+def get_model_path(base_path, model_type):
+    """Build model path based on selected type."""
+    if model_type == 'default':
+        return f"{base_path}.tflite"
+    elif model_type == 'edgetpu':
+        return f"{base_path}_int8_edgetpu.tflite"
+    elif model_type == 'edgetpu_pruned':
+        return f"{base_path}_int8_pruned_edgetpu.tflite"
+    else:
+        return f"{base_path}_{model_type}.tflite"
+
+# Build model paths
+KEYPOINT_MODEL_PATH = get_model_path(
+    'model/keypoint_classifier/keypoint_classifier',
+    KEYPOINT_MODEL_TYPE
+)
+POINT_HISTORY_MODEL_PATH = get_model_path(
+    'model/point_history_classifier/point_history_classifier',
+    POINT_HISTORY_MODEL_TYPE
+)
+ 
 
 def get_memory_usage():
     try:
@@ -52,13 +79,14 @@ def pre_process_point_history(image, point_history):
     return list(itertools.chain.from_iterable(temp))
 
 def run_benchmark(video_path, csv_path="benchmark_results.csv"):
+    
     cap = cv.VideoCapture(video_path)
 
     palm_detection = PalmDetection(score_threshold=0.6)
     hand_landmark = HandLandmark()
     
     kp_classifier = KeyPointClassifier(model_path=KEYPOINT_MODEL_PATH)
-    ph_classifier = PointHistoryClassifier(model_path=POINTHISTORY_MODEL_PATH, score_th=0.5)
+    ph_classifier = PointHistoryClassifier(model_path=POINT_HISTORY_MODEL_PATH, score_th=0.5)
 
     hist_len = 16
     point_history = deque(maxlen=hist_len)
@@ -197,7 +225,6 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     avg_combined = safe_avg(combined_confidences)
 
     header = [
-        "video",
         "kp_model_type",
         "ph_model_type",
         "avg_cycle_time_s",
@@ -216,14 +243,22 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     except:
         write_header = True
 
-    kp_type = "ONNX" if KEYPOINT_MODEL_PATH.endswith(".onnx") else "TFLite"
-    ph_type = "ONNX" if POINTHISTORY_MODEL_PATH.endswith(".onnx") else "TFLite"
-
+    # Use the configured model types for CSV logging
     with open(csv_path, "a", newline='', encoding="utf-8") as f:
         w = csv.writer(f)
         if write_header:
             w.writerow(header)
-        row = [video_path, kp_type, ph_type, avg_cycle, avg_prep, avg_infer, avg_mem, avg_kp_conf, avg_ph_conf, avg_combined]
+        row = [
+            KEYPOINT_MODEL_TYPE,
+            POINT_HISTORY_MODEL_TYPE,
+            avg_cycle,
+            avg_prep,
+            avg_infer,
+            avg_mem,
+            avg_kp_conf,
+            avg_ph_conf,
+            avg_combined
+        ]
         w.writerow(row)
     
 if __name__ == "__main__":

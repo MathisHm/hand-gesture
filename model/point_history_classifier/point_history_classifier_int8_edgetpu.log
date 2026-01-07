@@ -1,0 +1,9 @@
+Edge TPU Compiler version 16.0.384591198
+Input: model/point_history_classifier/point_history_classifier_int8.tflite
+Output: model/point_history_classifier/point_history_classifier_int8_edgetpu.tflite
+
+Operator                       Count      Status
+
+QUANTIZE                       2          Mapped to Edge TPU
+SOFTMAX                        1          Mapped to Edge TPU
+FULLY_CONNECTED                3          Mapped to Edge TPU

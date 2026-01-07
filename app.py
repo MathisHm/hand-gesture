@@ -19,6 +19,26 @@ from model import KeyPointClassifier
 from model import PointHistoryClassifier
 
 
+
+# Keypoint Classifier Model Selection
+KEYPOINT_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+
+# Point History Classifier Model Selection
+POINT_HISTORY_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+
+# Model path builder
+def get_model_path(base_path, model_type):
+    """Build model path based on selected type."""
+    if model_type == 'default':
+        return f"{base_path}.tflite"
+    elif model_type == 'edgetpu':
+        return f"{base_path}_int8_edgetpu.tflite"
+    elif model_type == 'edgetpu_pruned':
+        return f"{base_path}_int8_pruned_edgetpu.tflite"
+    else:
+        return f"{base_path}_{model_type}.tflite"
+
+
 def get_args():
     parser = argparse.ArgumentParser()
 
@@ -54,8 +74,21 @@ def main():
     palm_detection = PalmDetection(score_threshold=min_detection_confidence)
     hand_landmark = HandLandmark()
 
-    keypoint_classifier = KeyPointClassifier()
-    point_history_classifier = PointHistoryClassifier()
+    # Load classifiers with selected model variants
+    keypoint_model_path = get_model_path(
+        'model/keypoint_classifier/keypoint_classifier',
+        KEYPOINT_MODEL_TYPE
+    )
+    point_history_model_path = get_model_path(
+        'model/point_history_classifier/point_history_classifier',
+        POINT_HISTORY_MODEL_TYPE
+    )
+    
+    print(f"Loading Keypoint Classifier: {keypoint_model_path}")
+    print(f"Loading Point History Classifier: {point_history_model_path}")
+    
+    keypoint_classifier = KeyPointClassifier(model_path=keypoint_model_path)
+    point_history_classifier = PointHistoryClassifier(model_path=point_history_model_path)
 
     with open('model/keypoint_classifier/keypoint_classifier_label.csv', encoding='utf-8-sig') as f:
         keypoint_classifier_labels = [row[0] for row in csv.reader(f)]

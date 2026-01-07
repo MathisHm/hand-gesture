@@ -31,7 +31,37 @@ class KeyPointClassifier(object):
             self.input_name = self.onnx_session.get_inputs()[0].name
             self.output_name = self.onnx_session.get_outputs()[0].name
         else:
-            self.interpreter = tflite.Interpreter(model_path=model_path, num_threads=num_threads)
+            # Check if this is an Edge TPU model
+            is_edgetpu_model = '_edgetpu.tflite' in model_path
+            delegates = []
+            
+            if is_edgetpu_model:
+                # Try to load Edge TPU delegate
+                try:
+                    # Try different possible Edge TPU library names
+                    edgetpu_delegate = None
+                    for lib_name in ['libedgetpu.so.1', 'libedgetpu.so', 'libedgetpu.1.dylib']:
+                        try:
+                            edgetpu_delegate = tflite.load_delegate(lib_name)
+                            delegates.append(edgetpu_delegate)
+                            print(f"✓ Edge TPU delegate loaded: {lib_name}")
+                            break
+                        except:
+                            continue
+                    
+                    if not edgetpu_delegate:
+                        print("⚠ Edge TPU delegate not found, falling back to CPU")
+                        print("  Install Edge TPU runtime: https://coral.ai/docs/accelerator/get-started/")
+                except Exception as e:
+                    print(f"⚠ Could not load Edge TPU delegate: {e}")
+                    print("  Running on CPU instead")
+            
+            # Create interpreter with or without Edge TPU delegate
+            self.interpreter = tflite.Interpreter(
+                model_path=model_path,
+                num_threads=num_threads,
+                experimental_delegates=delegates if delegates else None
+            )
             self.interpreter.allocate_tensors()
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
@@ -64,11 +94,27 @@ class KeyPointClassifier(object):
         else:
             # TFLite Inference
             input_details_tensor_index = self.input_details[0]['index']
+            input_dtype = self.input_details[0]['dtype']
+            
+            # Handle quantized models (INT8/UINT8)
+            if input_dtype == np.uint8 or input_dtype == np.int8:
+                # Get quantization parameters
+                input_scale, input_zero_point = self.input_details[0]['quantization']
+                # Quantize input data
+                input_data = (input_data / input_scale + input_zero_point).astype(input_dtype)
+            
             self.interpreter.set_tensor(input_details_tensor_index, input_data)
             self.interpreter.invoke()
 
             output_details_tensor_index = self.output_details[0]['index']
             result = self.interpreter.get_tensor(output_details_tensor_index)
+            
+            # Handle quantized output
+            output_dtype = self.output_details[0]['dtype']
+            if output_dtype == np.uint8 or output_dtype == np.int8:
+                # Dequantize output
+                output_scale, output_zero_point = self.output_details[0]['quantization']
+                result = (result.astype(np.float32) - output_zero_point) * output_scale
 
             result = np.squeeze(result)
             result_index = np.argmax(result)
