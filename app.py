@@ -21,22 +21,21 @@ from model import PointHistoryClassifier
 
 
 # Keypoint Classifier Model Selection
-KEYPOINT_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+KEYPOINT_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 
 # Point History Classifier Model Selection
-POINT_HISTORY_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+
+# Point History Classifier Model Selection
+POINT_HISTORY_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
+
+# Hand Landmark Model Selection
+HAND_LANDMARK_MODEL_TYPE = "fp32" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
+
 
 # Model path builder
 def get_model_path(base_path, model_type):
     """Build model path based on selected type."""
-    if model_type == 'default':
-        return f"{base_path}.tflite"
-    elif model_type == 'edgetpu':
-        return f"{base_path}_int8_edgetpu.tflite"
-    elif model_type == 'edgetpu_pruned':
-        return f"{base_path}_int8_pruned_edgetpu.tflite"
-    else:
-        return f"{base_path}_{model_type}.tflite"
+    return f"{base_path}_{model_type}.tflite"
 
 
 def get_args():
@@ -72,7 +71,17 @@ def main():
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
     palm_detection = PalmDetection(score_threshold=min_detection_confidence)
-    hand_landmark = HandLandmark()
+    palm_detection = PalmDetection(score_threshold=min_detection_confidence)
+    
+    # Hand Landmark
+    hand_landmark_model_path = get_model_path(
+         'model/hand_landmark/hand_landmark',
+         HAND_LANDMARK_MODEL_TYPE
+    )
+        
+    print(f"Loading Hand Landmark Model: {hand_landmark_model_path}")
+    hand_landmark = HandLandmark(model_path=hand_landmark_model_path)
+
 
     # Load classifiers with selected model variants
     keypoint_model_path = get_model_path(

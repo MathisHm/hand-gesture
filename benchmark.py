@@ -3,6 +3,8 @@ import time
 import copy
 import itertools
 import subprocess
+import os
+import psutil
 from collections import deque
 from math import degrees
 
@@ -17,22 +19,19 @@ from model import HandLandmark
 
 
 # Keypoint Classifier Model Selection
-KEYPOINT_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+KEYPOINT_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 
 # Point History Classifier Model Selection
-POINT_HISTORY_MODEL_TYPE = "default"  # Options: 'default', 'int8', 'fp16', 'int8_pruned', 'fp16_pruned', 'edgetpu', 'edgetpu_pruned'
+POINT_HISTORY_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 
+# Hand Landmark Model Selection
+HAND_LANDMARK_MODEL_TYPE = "fp32" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
+
+# Model path builder
 # Model path builder
 def get_model_path(base_path, model_type):
     """Build model path based on selected type."""
-    if model_type == 'default':
-        return f"{base_path}.tflite"
-    elif model_type == 'edgetpu':
-        return f"{base_path}_int8_edgetpu.tflite"
-    elif model_type == 'edgetpu_pruned':
-        return f"{base_path}_int8_pruned_edgetpu.tflite"
-    else:
-        return f"{base_path}_{model_type}.tflite"
+    return f"{base_path}_{model_type}.tflite"
 
 # Build model paths
 KEYPOINT_MODEL_PATH = get_model_path(
@@ -47,9 +46,8 @@ POINT_HISTORY_MODEL_PATH = get_model_path(
 
 def get_memory_usage():
     try:
-        mem_usage = subprocess.check_output(['free', '-m']).decode('utf-8').split('\n')
-        used_memory = mem_usage[1].split()[2]
-        return int(used_memory)
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / 1024 / 1024  # Returns MB
     except:
         return -1
 
@@ -83,7 +81,14 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     cap = cv.VideoCapture(video_path)
 
     palm_detection = PalmDetection(score_threshold=0.6)
-    hand_landmark = HandLandmark()
+    
+    # Resolve Hand Landmark Model Path
+    hand_landmark_model_path = get_model_path(
+         'model/hand_landmark/hand_landmark',
+         HAND_LANDMARK_MODEL_TYPE
+    )
+
+    hand_landmark = HandLandmark(model_path=hand_landmark_model_path)
     
     kp_classifier = KeyPointClassifier(model_path=KEYPOINT_MODEL_PATH)
     ph_classifier = PointHistoryClassifier(model_path=POINT_HISTORY_MODEL_PATH, score_th=0.5)
@@ -227,6 +232,7 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     header = [
         "kp_model_type",
         "ph_model_type",
+        "hl_model_type",
         "avg_cycle_time_s",
         "avg_preprocess_time_s",
         "avg_inference_time_s", 
@@ -251,6 +257,7 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
         row = [
             KEYPOINT_MODEL_TYPE,
             POINT_HISTORY_MODEL_TYPE,
+            HAND_LANDMARK_MODEL_TYPE,
             avg_cycle,
             avg_prep,
             avg_infer,
