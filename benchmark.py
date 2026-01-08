@@ -2,7 +2,6 @@ import csv
 import time
 import copy
 import itertools
-import subprocess
 import os
 import psutil
 from collections import deque
@@ -25,7 +24,10 @@ KEYPOINT_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 POINT_HISTORY_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 
 # Hand Landmark Model Selection
-HAND_LANDMARK_MODEL_TYPE = "fp32" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
+HAND_LANDMARK_MODEL_TYPE = "fp16" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
+
+# Palm Detection Model Selection
+PALM_DETECTION_MODEL_TYPE = "fp16"  # Options: 'fp32', 'fp16'
 
 # Model path builder
 # Model path builder
@@ -80,7 +82,14 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     
     cap = cv.VideoCapture(video_path)
 
-    palm_detection = PalmDetection(score_threshold=0.6)
+    palm_detection_model_path = get_model_path(
+        'model/palm_detection/palm_detection',
+         PALM_DETECTION_MODEL_TYPE
+    )
+    palm_detection = PalmDetection(
+        model_path=palm_detection_model_path,
+        score_threshold=0.6
+    )
     
     # Resolve Hand Landmark Model Path
     hand_landmark_model_path = get_model_path(
@@ -233,6 +242,7 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
         "kp_model_type",
         "ph_model_type",
         "hl_model_type",
+        "pd_model_type",
         "avg_cycle_time_s",
         "avg_preprocess_time_s",
         "avg_inference_time_s", 
@@ -258,6 +268,7 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
             KEYPOINT_MODEL_TYPE,
             POINT_HISTORY_MODEL_TYPE,
             HAND_LANDMARK_MODEL_TYPE,
+            PALM_DETECTION_MODEL_TYPE,
             avg_cycle,
             avg_prep,
             avg_infer,

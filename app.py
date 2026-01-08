@@ -31,6 +31,9 @@ POINT_HISTORY_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 # Hand Landmark Model Selection
 HAND_LANDMARK_MODEL_TYPE = "fp32" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 
+# Palm Detection Model Selection
+PALM_DETECTION_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16'
+
 
 # Model path builder
 def get_model_path(base_path, model_type):
@@ -70,8 +73,15 @@ def main():
     cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
     cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
-    palm_detection = PalmDetection(score_threshold=min_detection_confidence)
-    palm_detection = PalmDetection(score_threshold=min_detection_confidence)
+    palm_detection_model_path = get_model_path(
+        'model/palm_detection/palm_detection',
+        PALM_DETECTION_MODEL_TYPE
+    )
+    print(f"Loading Palm Detection Model: {palm_detection_model_path}")
+    palm_detection = PalmDetection(
+        model_path=palm_detection_model_path,
+        score_threshold=min_detection_confidence
+    )
     
     # Hand Landmark
     hand_landmark_model_path = get_model_path(

@@ -21,7 +21,7 @@ from utils.utils import (
 class PalmDetection(object):
     def __init__(
         self,
-        model_path: Optional[str] = 'model/palm_detection/palm_detection_full_inf_post_192x192.onnx',
+        model_path: Optional[str] = 'model/palm_detection/palm_detection_fp32.tflite',
         score_threshold: Optional[float] = 0.60,
         num_threads: Optional[int] = 1,
         providers: Optional[List] = [
@@ -185,16 +185,8 @@ class PalmDetection(object):
             self.interpreter.set_tensor(input_details_tensor_index, inferece_image)
             self.interpreter.invoke()
 
-            # TFLite palm_detection_full.tflite has 2 outputs: regressors and classificators
-            # We need to process them similar to the ONNX post-processed output
-            regressors_index = self.output_details[0]['index']
-            classificators_index = self.output_details[1]['index']
-            
-            regressors = self.interpreter.get_tensor(regressors_index)
-            classificators = self.interpreter.get_tensor(classificators_index)
-            
             # Process raw outputs into the format expected by postprocess
-            boxes = self.__process_tflite_outputs(regressors, classificators)
+            boxes = self.__process_tflite_outputs()
 
         # PostProcess
         hands = self.__postprocess(
@@ -204,26 +196,23 @@ class PalmDetection(object):
 
         return hands
 
-
     def __process_tflite_outputs(
         self,
-        regressors: np.ndarray,
-        classificators: np.ndarray,
     ) -> np.ndarray:
-        """Process raw TFLite outputs into postprocess-compatible format
+        """Process raw TFLite outputs into postprocess-compatible format"""
         
-        Parameters
-        ----------
-        regressors: np.ndarray
-            [1, 2016, 18] - bounding box and keypoint regressors
-        classificators: np.ndarray
-            [1, 2016, 1] - palm detection scores
-            
-        Returns
-        -------
-        boxes: np.ndarray
-            [N, 8] - pd_score, box_x, box_y, box_size, kp0_x, kp0_y, kp2_x, kp2_y
-        """
+        # Identify outputs by shape
+        regressors_index = -1
+        classificators_index = -1
+        for detail in self.output_details:
+            if detail['shape'][-1] == 18:
+                regressors_index = detail['index']
+            elif detail['shape'][-1] == 1:
+                classificators_index = detail['index']
+        
+        regressors = self.interpreter.get_tensor(regressors_index)
+        classificators = self.interpreter.get_tensor(classificators_index)
+        
         # Remove batch dimension
         regressors = regressors[0]  # [2016, 18]
         scores = classificators[0]  # [2016, 1]
@@ -239,32 +228,68 @@ class PalmDetection(object):
         
         if len(scores) == 0:
             return np.array([]).reshape(0, 8)
+
+        # Generate anchors if not already done
+        if not hasattr(self, 'anchors'):
+             self.anchors = self._generate_anchors(input_size_w=192, input_size_h=192)
         
-        # Extract box coordinates and keypoints from regressors
-        # MediaPipe palm detection output format:
-        # regressors: [box_y, box_x, box_h, box_w, ...18 values total including keypoints]
-        # We need: [pd_score, box_x, box_y, box_size, kp0_x, kp0_y, kp2_x, kp2_y]
+        anchors = self.anchors[keep_indices]
+
+        # Decode Logic
+        # regressors: [x, y, w, h, kp0_x, kp0_y, kp1_x, kp1_y ... kp6_x, kp6_y] (18 values)
+        # However, MediaPipe standard might be [y, x, h, w]?
+        # Let's check based on 128x128 behavior or experiment.
+        # Assuming [x, y, w, h] for now.
         
-        box_y = regressors[:, 0]
-        box_x = regressors[:, 1]
-        box_h = regressors[:, 2]
-        box_w = regressors[:, 3]
+        # 192x192 model usually follows standard SSD box decoding
+        # box_coordinate = anchor_coordinate + model_output * anchor_scale?
+        # Or box_coordinate = model_output (if model output is absolute?)
+        # Since standard TFLite models output OFFSETS, we decode.
         
-        # Keypoints (palm detection uses 7 keypoints, we need keypoint 0 and 2)
-        # Keypoints start at index 4, each has x,y coordinates
-        kp0_x = regressors[:, 4]
-        kp0_y = regressors[:, 5]
-        kp2_x = regressors[:, 8]  # keypoint 2 x (skip keypoint 1)
-        kp2_y = regressors[:, 9]  # keypoint 2 y
+        # Constant scale factors (standard MediaPipe constants)
+        target_box_width = 192
+        target_box_height = 192
         
-        # Calculate box_size as average of width and height
-        box_size = (box_w + box_h) / 2.0
+        # Decode box
+        # Output is usually normalized by 192.
+        # dx, dy, dw, dh = regressors[:, 0], regressors[:, 1], regressors[:, 2], regressors[:, 3]
+        # cx = dx + anchor_x_center
+        # cy = dy + anchor_y_center
+        # w = dw + anchor_w? No?
         
-        # Stack into expected format
+        # Using standard Mediapie Palm Detection decoding constants:
+        # x_scale = y_scale = 192
+        # w_scale = h_scale = 192
+        
+        box_x_center = regressors[:, 0] / 192.0 + anchors[:, 0]
+        box_y_center = regressors[:, 1] / 192.0 + anchors[:, 1]
+        box_w = regressors[:, 2] / 192.0
+        box_h = regressors[:, 3] / 192.0
+        
+        # Keypoints (7 keypoints * 2 coords = 14 values)
+        # Starts at index 4
+        # kp_x = reg_kp_x / 192.0 + anchor_x
+        # kp_y = reg_kp_y / 192.0 + anchor_y
+        
+        kp0_x = regressors[:, 4] / 192.0 + anchors[:, 0]
+        kp0_y = regressors[:, 5] / 192.0 + anchors[:, 1]
+        
+        # Keypoint 2 (Index 2 -> 4 + 2*2 = 8)
+        kp2_x = regressors[:, 8] / 192.0 + anchors[:, 0]
+        kp2_y = regressors[:, 9] / 192.0 + anchors[:, 1]
+
+        # Convert simple [cx, cy, w, h] to [x, y, size] format expected by post-process
+        # Code expects: box_x (center), box_y (center), box_size (max(w,h)?)
+        
+        # The existing postprocess expects:
+        # pd_score, box_x, box_y, box_size, kp0_x, kp0_y, kp2_x, kp2_y
+        
+        box_size = np.maximum(box_w, box_h)
+        
         boxes = np.stack([
             scores,
-            box_x,
-            box_y,
+            box_x_center,
+            box_y_center,
             box_size,
             kp0_x,
             kp0_y,
@@ -272,31 +297,47 @@ class PalmDetection(object):
             kp2_y
         ], axis=1)
         
-        # Apply simple NMS to remove overlapping detections
         boxes = self.__nms(boxes, iou_threshold=0.3)
-        
         return boxes
 
+    def _generate_anchors(self, input_size_w=192, input_size_h=192):
+        # Anchor config (Deduced for 2016 anchors)
+        # Layer 0: Stride 8, 2 anchors (24x24) -> 1152
+        # Layer 1: Stride 16, 6 anchors (12x12) -> 864
+        # Total: 2016
+        
+        anchors = []
+        
+        # Layer 0
+        stride = 8
+        rows, cols = input_size_h // stride, input_size_w // stride
+        num_anchors = 2
+        for y in range(rows):
+            for x in range(cols):
+                x_center = (x + 0.5) * stride / input_size_w
+                y_center = (y + 0.5) * stride / input_size_h
+                for _ in range(num_anchors):
+                    anchors.append([x_center, y_center])
+                    
+        # Layer 1
+        stride = 16
+        rows, cols = input_size_h // stride, input_size_w // stride
+        num_anchors = 6
+        for y in range(rows):
+            for x in range(cols):
+                x_center = (x + 0.5) * stride / input_size_w
+                y_center = (y + 0.5) * stride / input_size_h
+                for _ in range(num_anchors):
+                    anchors.append([x_center, y_center])
+                    
+        return np.array(anchors)
 
     def __nms(
         self,
         boxes: np.ndarray,
         iou_threshold: float = 0.3,
     ) -> np.ndarray:
-        """Simple Non-Maximum Suppression
-        
-        Parameters
-        ----------
-        boxes: np.ndarray
-            [N, 8] - pd_score, box_x, box_y, box_size, ...
-        iou_threshold: float
-            IoU threshold for NMS
-            
-        Returns
-        -------
-        boxes: np.ndarray
-            Filtered boxes after NMS
-        """
+        """Simple Non-Maximum Suppression"""
         if len(boxes) == 0:
             return boxes
             
@@ -316,13 +357,12 @@ class PalmDetection(object):
             box1 = boxes[0]
             remaining = boxes[1:]
             
-            # Simple distance-based filtering (instead of full IoU)
-            # Calculate center distance
+            # Simple distance-based filtering
             cx1, cy1 = box1[1], box1[2]
             cx_remaining, cy_remaining = remaining[:, 1], remaining[:, 2]
             
             distances = np.sqrt((cx1 - cx_remaining)**2 + (cy1 - cy_remaining)**2)
-            size_threshold = box1[3] * iou_threshold * 2  # Use box size for threshold
+            size_threshold = box1[3] * iou_threshold * 2
             
             # Keep boxes that are far enough
             boxes = remaining[distances > size_threshold]
