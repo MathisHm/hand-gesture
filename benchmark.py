@@ -15,6 +15,7 @@ from model import KeyPointClassifier
 from model import PointHistoryClassifier
 from model import PalmDetection
 from model import HandLandmark
+from utils.temperature_monitor import TemperatureMonitor
 
 
 # Keypoint Classifier Model Selection
@@ -113,6 +114,11 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     kp_confidences = [] 
     ph_confidences = []
     combined_confidences = []
+    
+    # Temperature monitoring
+    temp_monitor = TemperatureMonitor()
+    temperature_readings = []
+    throttling_events = []
 
     cap_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
     cap_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
@@ -221,6 +227,17 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
         ph_confidences.append(cur_ph_conf)
         combined_confidences.append(cur_combined_conf)
         memory_usages.append(get_memory_usage())
+        
+        # Collect temperature data
+        if temp_monitor.is_available():
+            temp = temp_monitor.read()
+            temperature_readings.append(temp)
+            
+            # Check for throttling
+            throttle_status = temp_monitor.check_throttling()
+            if throttle_status and throttle_status.get('currently_throttled'):
+                throttling_events.append(True)
+        
         cycle_times.append(time.time() - start_cycle_time)
 
     cap.release()
@@ -237,6 +254,12 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     avg_kp_conf = safe_avg(kp_confidences)
     avg_ph_conf = safe_avg(ph_confidences)
     avg_combined = safe_avg(combined_confidences)
+    
+    # Temperature statistics
+    avg_temp = safe_avg(temperature_readings) if temperature_readings else None
+    max_temp = max(temperature_readings) if temperature_readings else None
+    min_temp = min(temperature_readings) if temperature_readings else None
+    throttling_detected = len(throttling_events) > 0
 
     header = [
         "kp_model_type",
@@ -249,7 +272,11 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
         "avg_memory_usage_mb",
         "avg_keypoint_confidence",
         "avg_history_confidence",
-        "avg_combined_confidence"
+        "avg_combined_confidence",
+        "avg_temperature_c",
+        "max_temperature_c",
+        "min_temperature_c",
+        "throttling_detected"
     ]
 
     write_header = False
@@ -275,7 +302,11 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
             avg_mem,
             avg_kp_conf,
             avg_ph_conf,
-            avg_combined
+            avg_combined,
+            avg_temp,
+            max_temp,
+            min_temp,
+            throttling_detected
         ]
         w.writerow(row)
     
