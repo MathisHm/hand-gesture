@@ -2,7 +2,7 @@
 
 ################################################################################
 # Automated Benchmark Suite Runner
-# 
+#
 # Purpose: Run complete benchmark suite with proper preparation and cleanup
 #
 # Usage: sudo ./run_benchmark_suite.sh [output_csv]
@@ -24,7 +24,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then 
+if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Error: This script must be run as root (use sudo)${NC}"
     exit 1
 fi
@@ -98,7 +98,7 @@ START_TIME=$(date +%s)
 
 # Run benchmark with high priority
 echo -e "${BLUE}Starting benchmark with elevated priority...${NC}"
-nice -n -10 python3 "$BENCHMARK_SCRIPT" 2>&1 | tee benchmark_run.log
+nice -n -10 /home/pi/ia_env/bin/python "$BENCHMARK_SCRIPT" 2>&1 | tee benchmark_run.log
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
@@ -137,7 +137,7 @@ REPORT_FILE="benchmark_report_$(date +%Y%m%d_%H%M%S).txt"
     echo ""
     echo "Benchmark Duration: ${DURATION} seconds"
     echo ""
-    
+
     if [ -f "$OUTPUT_CSV" ]; then
         echo "Latest Results from $OUTPUT_CSV:"
         echo "----------------------------------------"
@@ -147,14 +147,14 @@ REPORT_FILE="benchmark_report_$(date +%Y%m%d_%H%M%S).txt"
         tail -n 1 "$OUTPUT_CSV"
         echo ""
     fi
-    
+
     if [ -f "benchmark_system_info.txt" ]; then
         echo ""
         echo "System Information:"
         echo "----------------------------------------"
         cat benchmark_system_info.txt
     fi
-    
+
     if [ -f "benchmark_run.log" ]; then
         echo ""
         echo "Benchmark Log:"
@@ -184,11 +184,11 @@ echo ""
 if [ -f "$OUTPUT_CSV" ]; then
     echo -e "${BLUE}Quick Stats (latest run):${NC}"
     echo "----------------------------------------"
-    
+
     # Extract last line and parse
     LAST_LINE=$(tail -n 1 "$OUTPUT_CSV")
     HEADER=$(head -n 1 "$OUTPUT_CSV")
-    
+
     # Simple column-based display
     paste <(echo "$HEADER" | tr ',' '\n') <(echo "$LAST_LINE" | tr ',' '\n') | column -t -s $'\t'
     echo ""
