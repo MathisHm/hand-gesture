@@ -4,6 +4,6 @@ Output: model/keypoint_classifier/keypoint_classifier_int8_edgetpu.tflite
 
 Operator                       Count      Status
 
+QUANTIZE                       2          Mapped to Edge TPU
 SOFTMAX                        1          Mapped to Edge TPU
 FULLY_CONNECTED                3          Mapped to Edge TPU
-QUANTIZE                       2          Mapped to Edge TPU
