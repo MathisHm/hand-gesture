@@ -25,10 +25,10 @@ KEYPOINT_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 POINT_HISTORY_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 
 # Hand Landmark Model Selection
-HAND_LANDMARK_MODEL_TYPE = "fp16" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
+HAND_LANDMARK_MODEL_TYPE = "fp32" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 
 # Palm Detection Model Selection
-PALM_DETECTION_MODEL_TYPE = "fp16"  # Options: 'fp32', 'fp16'
+PALM_DETECTION_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16'
 
 # Model path builder
 # Model path builder

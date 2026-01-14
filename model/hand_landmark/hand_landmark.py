@@ -94,6 +94,8 @@ class HandLandmark(object):
                     self.output_indices['score'] = detail['index']
                 elif clean_name == 'Identity_2':
                     self.output_indices['handedness'] = detail['index']
+                elif clean_name == 'Identity_3':
+                    self.output_indices['world_landmarks'] = detail['index']
 
 
     def __call__(
