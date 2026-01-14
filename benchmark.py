@@ -31,7 +31,6 @@ HAND_LANDMARK_MODEL_TYPE = "fp32" # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
 PALM_DETECTION_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16'
 
 # Model path builder
-# Model path builder
 def get_model_path(base_path, model_type):
     """Build model path based on selected type."""
     return f"{base_path}_{model_type}.tflite"
