@@ -36,25 +36,27 @@ class KeyPointClassifier(object):
             delegates = []
             
             if is_edgetpu_model:
-                # Try to load Edge TPU delegate
-                try:
-                    # Try different possible Edge TPU library names
-                    edgetpu_delegate = None
-                    for lib_name in ['libedgetpu.so.1', 'libedgetpu.so', 'libedgetpu.1.dylib']:
-                        try:
-                            edgetpu_delegate = tflite.load_delegate(lib_name)
-                            delegates.append(edgetpu_delegate)
-                            print(f"✓ Edge TPU delegate loaded: {lib_name}")
-                            break
-                        except:
-                            continue
-                    
-                    if not edgetpu_delegate:
-                        print("⚠ Edge TPU delegate not found, falling back to CPU")
-                        print("  Install Edge TPU runtime: https://coral.ai/docs/accelerator/get-started/")
-                except Exception as e:
-                    print(f"⚠ Could not load Edge TPU delegate: {e}")
-                    print("  Running on CPU instead")
+                edgetpu_delegate = None
+                last_error = None
+                
+                for lib_name in ['libedgetpu.so.1', 'libedgetpu.so', 'libedgetpu.1.dylib']:
+                    try:
+                        edgetpu_delegate = tflite.experimental.load_delegate(lib_name)
+                        delegates.append(edgetpu_delegate)
+                        print(f"✓ Edge TPU delegate loaded: {lib_name}")
+                        break
+                    except Exception as e:
+                        last_error = e
+                        continue
+                
+                if not edgetpu_delegate:
+                    error_msg = f"Edge TPU model specified but delegate could not be loaded. Last error: {last_error}\n"
+                    error_msg += "Make sure:\n"
+                    error_msg += "1. Edge TPU is plugged in (check with 'lsusb | grep Google')\n"
+                    error_msg += "2. Edge TPU runtime is installed (https://coral.ai/docs/accelerator/get-started/)\n"
+                    error_msg += "3. User has permissions to access the device\n"
+                    error_msg += "Or use a non-Edge TPU model (int8, fp16, fp32)"
+                    raise RuntimeError(error_msg)
             
             # Create interpreter with or without Edge TPU delegate
             self.interpreter = tflite.Interpreter(
