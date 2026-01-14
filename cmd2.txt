@@ -1,0 +1,37 @@
+# Commands to Fix Edge TPU Segmentation Fault
+
+# Problem: TensorFlow 2.10.0 is incompatible with Edge TPU Runtime v16.0
+# Solution: Downgrade to TensorFlow 2.9.0
+
+# Step 1: Activate your virtual environment (if using one)
+source .env/bin/activate
+
+# Step 2: Uninstall incompatible TensorFlow 2.10.0
+pip uninstall tensorflow -y
+
+# Step 3: Install compatible TensorFlow 2.9.0
+pip install tensorflow==2.9.0
+
+# Step 4: Verify the fix works
+python3.10 -c "
+import tensorflow.lite as tflite
+print(f'TensorFlow version: {tflite.__version__}')
+
+delegate = tflite.experimental.load_delegate('libedgetpu.so.1')
+print('✓ Edge TPU delegate loaded')
+
+interpreter = tflite.Interpreter(
+    model_path='model/keypoint_classifier/keypoint_classifier_edgetpu.tflite',
+    experimental_delegates=[delegate]
+)
+print('✓ Interpreter created (no segfault!)')
+interpreter.allocate_tensors()
+print('✓ All working!')
+"
+
+# Step 5: Run your benchmark
+python3.10 benchmark.py
+
+# Optional: To use more Edge TPU models, edit benchmark.py:
+# HAND_LANDMARK_MODEL_TYPE = "edgetpu"
+# POINT_HISTORY_MODEL_TYPE = "edgetpu"
