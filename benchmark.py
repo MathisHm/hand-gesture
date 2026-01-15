@@ -17,6 +17,8 @@ from model import PalmDetection
 from model import HandLandmark
 from utils.temperature_monitor import TemperatureMonitor
 
+# Number of runs for averaging
+NUM_RUNS = 3
 
 # Keypoint Classifier Model Selection
 KEYPOINT_MODEL_TYPE = "fp32"  # Options: 'fp32', 'fp16', 'int8', 'edgetpu'
@@ -78,30 +80,12 @@ def pre_process_point_history(image, point_history):
         temp[i][1] = (temp[i][1] - by) / h
     return list(itertools.chain.from_iterable(temp))
 
-def run_benchmark(video_path, csv_path="benchmark_results.csv"):
+def run_single_benchmark(video_path, models):
+    """Run a single benchmark iteration and return metrics."""
+    
+    palm_detection, hand_landmark, kp_classifier, ph_classifier = models
     
     cap = cv.VideoCapture(video_path)
-
-    palm_detection_model_path = get_model_path(
-        'model/palm_detection/palm_detection',
-         PALM_DETECTION_MODEL_TYPE
-    )
-    palm_detection = PalmDetection(
-        model_path=palm_detection_model_path,
-        score_threshold=0.6
-    )
-    
-    # Resolve Hand Landmark Model Path
-    hand_landmark_model_path = get_model_path(
-         'model/hand_landmark/hand_landmark',
-         HAND_LANDMARK_MODEL_TYPE
-    )
-
-    hand_landmark = HandLandmark(model_path=hand_landmark_model_path)
-    
-    kp_classifier = KeyPointClassifier(model_path=KEYPOINT_MODEL_PATH)
-    ph_classifier = PointHistoryClassifier(model_path=POINT_HISTORY_MODEL_PATH, score_th=0.5)
-
     hist_len = 16
     point_history = deque(maxlen=hist_len)
 
@@ -117,14 +101,12 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     # Temperature monitoring
     temp_monitor = TemperatureMonitor()
     temperature_readings = []
-    throttling_events = []
 
     cap_width = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
     cap_height = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
     
     if cap_width == 0 or cap_height == 0:
-        print("Error: Video not found or size is 0.")
-        return
+        return None
 
     wh_ratio = cap_width / cap_height
 
@@ -205,7 +187,6 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
                     else:
                         pass
 
- 
                     valid_scores = []
                     if cur_kp_conf is not None: valid_scores.append(cur_kp_conf)
                     if cur_ph_conf is not None: valid_scores.append(cur_ph_conf)
@@ -231,11 +212,6 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
         if temp_monitor.is_available():
             temp = temp_monitor.read()
             temperature_readings.append(temp)
-            
-            # Check for throttling
-            throttle_status = temp_monitor.check_throttling()
-            if throttle_status and throttle_status.get('currently_throttled'):
-                throttling_events.append(True)
         
         cycle_times.append(time.time() - start_cycle_time)
 
@@ -245,21 +221,75 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
         valid_items = [x for x in lst if x is not None]
         return sum(valid_items) / len(valid_items) if valid_items else 0
 
-    avg_cycle = safe_avg(cycle_times)
-    avg_prep = safe_avg(preprocess_times)
-    avg_infer = safe_avg(inference_times)
-    avg_mem = safe_avg(memory_usages)
-    
-    avg_kp_conf = safe_avg(kp_confidences)
-    avg_ph_conf = safe_avg(ph_confidences)
-    avg_combined = safe_avg(combined_confidences)
-    
-    # Temperature statistics
-    avg_temp = safe_avg(temperature_readings) if temperature_readings else None
-    max_temp = max(temperature_readings) if temperature_readings else None
-    min_temp = min(temperature_readings) if temperature_readings else None
-    throttling_detected = len(throttling_events) > 0
+    return {
+        'avg_cycle': safe_avg(cycle_times),
+        'avg_prep': safe_avg(preprocess_times),
+        'avg_infer': safe_avg(inference_times),
+        'avg_mem': safe_avg(memory_usages),
+        'avg_kp_conf': safe_avg(kp_confidences),
+        'avg_ph_conf': safe_avg(ph_confidences),
+        'avg_combined': safe_avg(combined_confidences),
+        'avg_temp': safe_avg(temperature_readings) if temperature_readings else None,
+        'max_temp': max(temperature_readings) if temperature_readings else None,
+        'min_temp': min(temperature_readings) if temperature_readings else None,
+    }
 
+def run_benchmark(video_path, csv_path="benchmark_results.csv", num_runs=NUM_RUNS):
+    """Run benchmark multiple times and average the results."""
+    
+    
+    # Initialize models once (reused across all runs)
+    palm_detection_model_path = get_model_path(
+        'model/palm_detection/palm_detection',
+         PALM_DETECTION_MODEL_TYPE
+    )
+    palm_detection = PalmDetection(
+        model_path=palm_detection_model_path,
+        score_threshold=0.6
+    )
+    
+    hand_landmark_model_path = get_model_path(
+         'model/hand_landmark/hand_landmark',
+         HAND_LANDMARK_MODEL_TYPE
+    )
+    hand_landmark = HandLandmark(model_path=hand_landmark_model_path)
+    
+    kp_classifier = KeyPointClassifier(model_path=KEYPOINT_MODEL_PATH)
+    ph_classifier = PointHistoryClassifier(model_path=POINT_HISTORY_MODEL_PATH, score_th=0.5)
+    
+    models = (palm_detection, hand_landmark, kp_classifier, ph_classifier)
+    
+    # Run multiple times and collect results
+    all_results = []
+    for run in range(1, num_runs + 1):
+        result = run_single_benchmark(video_path, models)
+        if result is None:
+            continue
+        all_results.append(result)
+    
+    if not all_results:
+        return
+    
+    # Average all numeric metrics
+    def avg_metric(key):
+        values = [r[key] for r in all_results if r[key] is not None]
+        return sum(values) / len(values) if values else None
+    
+    # Calculate averages
+    averaged = {
+        'avg_cycle': avg_metric('avg_cycle'),
+        'avg_prep': avg_metric('avg_prep'),
+        'avg_infer': avg_metric('avg_infer'),
+        'avg_mem': avg_metric('avg_mem'),
+        'avg_kp_conf': avg_metric('avg_kp_conf'),
+        'avg_ph_conf': avg_metric('avg_ph_conf'),
+        'avg_combined': avg_metric('avg_combined'),
+        'avg_temp': avg_metric('avg_temp'),
+        'max_temp': max([r['max_temp'] for r in all_results if r['max_temp'] is not None], default=None),
+        'min_temp': min([r['min_temp'] for r in all_results if r['min_temp'] is not None], default=None),
+    }
+    
+    # Write averaged results to CSV
     header = [
         "kp_model_type",
         "ph_model_type",
@@ -274,8 +304,7 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
         "avg_combined_confidence",
         "avg_temperature_c",
         "max_temperature_c",
-        "min_temperature_c",
-        "throttling_detected"
+        "min_temperature_c"
     ]
 
     write_header = False
@@ -285,7 +314,6 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
     except:
         write_header = True
 
-    # Use the configured model types for CSV logging
     with open(csv_path, "a", newline='', encoding="utf-8") as f:
         w = csv.writer(f)
         if write_header:
@@ -295,17 +323,16 @@ def run_benchmark(video_path, csv_path="benchmark_results.csv"):
             POINT_HISTORY_MODEL_TYPE,
             HAND_LANDMARK_MODEL_TYPE,
             PALM_DETECTION_MODEL_TYPE,
-            avg_cycle,
-            avg_prep,
-            avg_infer,
-            avg_mem,
-            avg_kp_conf,
-            avg_ph_conf,
-            avg_combined,
-            avg_temp,
-            max_temp,
-            min_temp,
-            throttling_detected
+            averaged['avg_cycle'],
+            averaged['avg_prep'],
+            averaged['avg_infer'],
+            averaged['avg_mem'],
+            averaged['avg_kp_conf'],
+            averaged['avg_ph_conf'],
+            averaged['avg_combined'],
+            averaged['avg_temp'],
+            averaged['max_temp'],
+            averaged['min_temp']
         ]
         w.writerow(row)
     

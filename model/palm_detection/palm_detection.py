@@ -24,113 +24,73 @@ class PalmDetection(object):
         model_path: Optional[str] = 'model/palm_detection/palm_detection_fp32.tflite',
         score_threshold: Optional[float] = 0.60,
         num_threads: Optional[int] = 1,
-        providers: Optional[List] = [
-            # (
-            #     'TensorrtExecutionProvider', {
-            #         'trt_engine_cache_enable': True,
-            #         'trt_engine_cache_path': '.',
-            #         'trt_fp16_enable': True,
-            #     }
-            # ),
-            'CUDAExecutionProvider',
-            'CPUExecutionProvider',
-        ],
     ):
         """PalmDetection
 
         Parameters
         ----------
         model_path: Optional[str]
-            ONNX or TFLite file path for Palm Detection
+            TFLite file path for Palm Detection
 
         score_threshold: Optional[float]
             Detection score threshold. Default: 0.60
 
         num_threads: Optional[int]
             Number of threads for TFLite inference. Default: 1
-
-        providers: Optional[List]
-            Name of onnx execution providers (only used for ONNX models)
-            Default:
-            [
-                (
-                    'TensorrtExecutionProvider', {
-                        'trt_engine_cache_enable': True,
-                        'trt_engine_cache_path': '.',
-                        'trt_fp16_enable': True,
-                    }
-                ),
-                'CUDAExecutionProvider',
-                'CPUExecutionProvider',
-            ]
         """
         # Threshold
         self.score_threshold = score_threshold
         self.model_path = model_path
-        self.use_onnx = model_path.endswith('.onnx')
-
-        if self.use_onnx:
-            # ONNX Model loading
-            import onnxruntime
-            session_option = onnxruntime.SessionOptions()
-            session_option.log_severity_level = 3
-            self.onnx_session = onnxruntime.InferenceSession(
-                model_path,
-                sess_options=session_option,
-                providers=providers,
-            )
-            self.providers = self.onnx_session.get_providers()
-
-            self.input_shapes = [
-                input.shape for input in self.onnx_session.get_inputs()
-            ]
-            self.input_names = [
-                input.name for input in self.onnx_session.get_inputs()
-            ]
-            self.output_names = [
-                output.name for output in self.onnx_session.get_outputs()
-            ]
-        else:
-            # TFLite Model loading
+        # TFLite Model loading with compatibility for both platforms
+        # Try tflite_runtime first (Raspberry Pi 4), then fall back to tensorflow.lite (laptop)
+        try:
+            import tflite_runtime.interpreter as tflite
+            using_tflite_runtime = True
+        except ImportError:
             import tensorflow.lite as tflite
-            
-            # Check if this is an Edge TPU model
-            is_edgetpu_model = '_edgetpu.tflite' in model_path
-            delegates = []
-            
-            if is_edgetpu_model:
-                # Try to load Edge TPU delegate
-                try:
-                    edgetpu_delegate = None
-                    for lib_name in ['libedgetpu.so.1', 'libedgetpu.so', 'libedgetpu.1.dylib']:
-                        try:
+            using_tflite_runtime = False
+        
+        # Check if this is an Edge TPU model
+        is_edgetpu_model = '_edgetpu.tflite' in model_path
+        delegates = []
+        
+        if is_edgetpu_model:
+            # Try to load Edge TPU delegate
+            try:
+                edgetpu_delegate = None
+                for lib_name in ['libedgetpu.so.1', 'libedgetpu.so', 'libedgetpu.1.dylib']:
+                    try:
+                        # tflite_runtime uses load_delegate, tensorflow.lite uses experimental.load_delegate
+                        if using_tflite_runtime:
                             edgetpu_delegate = tflite.load_delegate(lib_name)
-                            delegates.append(edgetpu_delegate)
-                            print(f"✓ Edge TPU delegate loaded: {lib_name}")
-                            break
-                        except:
-                            continue
-                    
-                    if not edgetpu_delegate:
-                        print("⚠ Edge TPU delegate not found, falling back to CPU")
-                        print("  Install Edge TPU runtime: https://coral.ai/docs/accelerator/get-started/")
-                except Exception as e:
-                    print(f"⚠ Could not load Edge TPU delegate: {e}")
-                    print("  Running on CPU instead")
-            
-            # Create interpreter with or without Edge TPU delegate
-            self.interpreter = tflite.Interpreter(
-                model_path=model_path,
-                num_threads=num_threads,
-                experimental_delegates=delegates if delegates else None
-            )
-            self.interpreter.allocate_tensors()
-            self.input_details = self.interpreter.get_input_details()
-            self.output_details = self.interpreter.get_output_details()
-            
-            # Get input shapes from TFLite
-            self.input_shapes = [detail['shape'] for detail in self.input_details]
-            
+                        else:
+                            edgetpu_delegate = tflite.experimental.load_delegate(lib_name)
+                        delegates.append(edgetpu_delegate)
+                        print(f"✓ Edge TPU delegate loaded: {lib_name}")
+                        break
+                    except:
+                        continue
+                
+                if not edgetpu_delegate:
+                    print("⚠ Edge TPU delegate not found, falling back to CPU")
+                    print("  Install Edge TPU runtime: https://coral.ai/docs/accelerator/get-started/")
+            except Exception as e:
+                print(f"⚠ Could not load Edge TPU delegate: {e}")
+                print("  Running on CPU instead")
+        
+        # Create interpreter with or without Edge TPU delegate
+        self.interpreter = tflite.Interpreter(
+            model_path=model_path,
+            num_threads=num_threads,
+            experimental_delegates=delegates if delegates else None
+        )
+        self.interpreter.allocate_tensors()
+        self.input_details = self.interpreter.get_input_details()
+        self.output_details = self.interpreter.get_output_details()
+        
+        # Get input shapes from TFLite
+        self.input_shapes = [detail['shape'] for detail in self.input_details]
+        
         self.square_standard_size = 0
 
 
@@ -159,34 +119,25 @@ class PalmDetection(object):
         )
 
         # Inference
-        if self.use_onnx:
-            # ONNX Inference
-            inferece_image = np.asarray([inference_image], dtype=np.float32)
-            boxes = self.onnx_session.run(
-                self.output_names,
-                {input_name: inferece_image for input_name in self.input_names},
-            )
-            boxes = boxes[0]
-        else:
-            # TFLite Inference
-            input_details_tensor_index = self.input_details[0]['index']
-            input_dtype = self.input_details[0]['dtype']
-            
-            # Prepare input data (TFLite expects NHWC format)
-            inferece_image = np.asarray([inference_image], dtype=np.float32)
-            
-            # Handle quantized models (INT8/UINT8)
-            if input_dtype == np.uint8 or input_dtype == np.int8:
-                # Get quantization parameters
-                input_scale, input_zero_point = self.input_details[0]['quantization']
-                # Quantize input data
-                inferece_image = (inferece_image / input_scale + input_zero_point).astype(input_dtype)
-            
-            self.interpreter.set_tensor(input_details_tensor_index, inferece_image)
-            self.interpreter.invoke()
+        # TFLite Inference
+        input_details_tensor_index = self.input_details[0]['index']
+        input_dtype = self.input_details[0]['dtype']
+        
+        # Prepare input data (TFLite expects NHWC format)
+        inferece_image = np.asarray([inference_image], dtype=np.float32)
+        
+        # Handle quantized models (INT8/UINT8)
+        if input_dtype == np.uint8 or input_dtype == np.int8:
+            # Get quantization parameters
+            input_scale, input_zero_point = self.input_details[0]['quantization']
+            # Quantize input data
+            inferece_image = (inferece_image / input_scale + input_zero_point).astype(input_dtype)
+        
+        self.interpreter.set_tensor(input_details_tensor_index, inferece_image)
+        self.interpreter.invoke()
 
-            # Process raw outputs into the format expected by postprocess
-            boxes = self.__process_tflite_outputs()
+        # Process raw outputs into the format expected by postprocess
+        boxes = self.__process_tflite_outputs()
 
         # PostProcess
         hands = self.__postprocess(
@@ -396,13 +347,9 @@ class PalmDetection(object):
             Resized and Padding and normalized image.
         """
         # Resize + Padding + Normalization + BGR->RGB
-        # Handle different input formats: ONNX uses NCHW, TFLite uses NHWC
-        if self.use_onnx:
-            input_h = self.input_shapes[0][2]
-            input_w = self.input_shapes[0][3]
-        else:
-            input_h = self.input_shapes[0][1]
-            input_w = self.input_shapes[0][2]
+        # TFLite uses NHWC format
+        input_h = self.input_shapes[0][1]
+        input_w = self.input_shapes[0][2]
         image_height , image_width = image.shape[:2]
 
         self.square_standard_size = max(image_height, image_width)
@@ -422,10 +369,6 @@ class PalmDetection(object):
 
         padded_image = np.divide(padded_image, 255.0)
         padded_image = padded_image[..., ::-1]
-        
-        # Only transpose for ONNX (NCHW), TFLite keeps NHWC format
-        if self.use_onnx:
-            padded_image = padded_image.transpose(swap)
         
         padded_image = np.ascontiguousarray(
             padded_image,

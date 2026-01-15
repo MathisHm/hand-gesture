@@ -16,92 +16,74 @@ class HandLandmark(object):
         model_path: Optional[str] = 'model/hand_landmark/hand_landmark_int8.tflite',
         class_score_th: Optional[float] = 0.50,
         num_threads: Optional[int] = 1,
-        providers: Optional[List] = [
-            'CUDAExecutionProvider',
-            'CPUExecutionProvider',
-        ],
     ):
         self.class_score_th = class_score_th
-        self.use_onnx = model_path.endswith('.onnx')
-
-        if self.use_onnx:
-            # ONNX Model loading
-            import onnxruntime
-            session_option = onnxruntime.SessionOptions()
-            session_option.log_severity_level = 3
-            self.onnx_session = onnxruntime.InferenceSession(
-                model_path,
-                sess_options=session_option,
-                providers=providers,
-            )
-            self.providers = self.onnx_session.get_providers()
-
-            self.input_shapes = [
-                input.shape for input in self.onnx_session.get_inputs()
-            ]
-            self.input_names = [
-                input.name for input in self.onnx_session.get_inputs()
-            ]
-            self.output_names = [
-                output.name for output in self.onnx_session.get_outputs()
-            ]
-        else:
-            # TFLite Model loading
+        # TFLite Model loading with compatibility for both platforms
+        # Try tflite_runtime first (Raspberry Pi 4), then fall back to tensorflow.lite (laptop)
+        try:
+            import tflite_runtime.interpreter as tflite
+            using_tflite_runtime = True
+        except ImportError:
             import tensorflow.lite as tflite
+            using_tflite_runtime = False
+        
+        # Check if this is an Edge TPU model
+        is_edgetpu_model = '_edgetpu.tflite' in model_path
+        delegates = []
+        
+        if is_edgetpu_model:
+            edgetpu_delegate = None
+            last_error = None
             
-            # Check if this is an Edge TPU model
-            is_edgetpu_model = '_edgetpu.tflite' in model_path
-            delegates = []
-            
-            if is_edgetpu_model:
-                edgetpu_delegate = None
-                last_error = None
-                
-                for lib_name in ['libedgetpu.so.1', 'libedgetpu.so', 'libedgetpu.1.dylib']:
-                    try:
+            for lib_name in ['libedgetpu.so.1', 'libedgetpu.so', 'libedgetpu.1.dylib']:
+                try:
+                    # tflite_runtime uses load_delegate, tensorflow.lite uses experimental.load_delegate
+                    if using_tflite_runtime:
+                        edgetpu_delegate = tflite.load_delegate(lib_name)
+                    else:
                         edgetpu_delegate = tflite.experimental.load_delegate(lib_name)
-                        delegates.append(edgetpu_delegate)
-                        print(f"✓ Edge TPU delegate loaded: {lib_name}")
-                        break
-                    except Exception as e:
-                        last_error = e
-                        continue
-                
-                if not edgetpu_delegate:
-                    error_msg = f"Edge TPU model specified but delegate could not be loaded. Last error: {last_error}\n"
-                    error_msg += "Make sure:\n"
-                    error_msg += "1. Edge TPU is plugged in (check with 'lsusb | grep Google')\n"
-                    error_msg += "2. Edge TPU runtime is installed (https://coral.ai/docs/accelerator/get-started/)\n"
-                    error_msg += "3. User has permissions to access the device\n"
-                    error_msg += "Or use a non-Edge TPU model (int8, fp16, fp32)"
-                    raise RuntimeError(error_msg)
+                    delegates.append(edgetpu_delegate)
+                    print(f"✓ Edge TPU delegate loaded: {lib_name}")
+                    break
+                except Exception as e:
+                    last_error = e
+                    continue
             
-            self.interpreter = tflite.Interpreter(
-                model_path=model_path,
-                num_threads=num_threads,
-                experimental_delegates=delegates if delegates else None
-            )
-            self.interpreter.allocate_tensors()
-            self.input_details = self.interpreter.get_input_details()
-            self.output_details = self.interpreter.get_output_details()
+            if not edgetpu_delegate:
+                error_msg = f"Edge TPU model specified but delegate could not be loaded. Last error: {last_error}\n"
+                error_msg += "Make sure:\n"
+                error_msg += "1. Edge TPU is plugged in (check with 'lsusb | grep Google')\n"
+                error_msg += "2. Edge TPU runtime is installed (https://coral.ai/docs/accelerator/get-started/)\n"
+                error_msg += "3. User has permissions to access the device\n"
+                error_msg += "Or use a non-Edge TPU model (int8, fp16, fp32)"
+                raise RuntimeError(error_msg)
+        
+        self.interpreter = tflite.Interpreter(
+            model_path=model_path,
+            num_threads=num_threads,
+            experimental_delegates=delegates if delegates else None
+        )
+        self.interpreter.allocate_tensors()
+        self.input_details = self.interpreter.get_input_details()
+        self.output_details = self.interpreter.get_output_details()
+        
+        self.input_shapes = [detail['shape'] for detail in self.input_details]
+        
+        # Identify output indices by name
+        self.output_indices = {}
+        for detail in self.output_details:
+            name = detail['name']
+            # Clean name (remove :0 suffix if present)
+            clean_name = name.split(':')[0]
             
-            self.input_shapes = [detail['shape'] for detail in self.input_details]
-            
-            # Identify output indices by name
-            self.output_indices = {}
-            for detail in self.output_details:
-                name = detail['name']
-                # Clean name (remove :0 suffix if present)
-                clean_name = name.split(':')[0]
-                
-                if clean_name == 'Identity':
-                    self.output_indices['landmarks'] = detail['index']
-                elif clean_name == 'Identity_1':
-                    self.output_indices['score'] = detail['index']
-                elif clean_name == 'Identity_2':
-                    self.output_indices['handedness'] = detail['index']
-                elif clean_name == 'Identity_3':
-                    self.output_indices['world_landmarks'] = detail['index']
+            if clean_name == 'Identity':
+                self.output_indices['landmarks'] = detail['index']
+            elif clean_name == 'Identity_1':
+                self.output_indices['score'] = detail['index']
+            elif clean_name == 'Identity_2':
+                self.output_indices['handedness'] = detail['index']
+            elif clean_name == 'Identity_3':
+                self.output_indices['world_landmarks'] = detail['index']
 
 
     def __call__(
@@ -116,45 +98,39 @@ class HandLandmark(object):
             images=temp_images,
         )
 
-        if self.use_onnx:
-            xyz_x21s, hand_scores, left_hand_0_or_right_hand_1s = self.onnx_session.run(
-                self.output_names,
-                {input_name: inference_images for input_name in self.input_names},
-            )
-        else:
-            # TFLite Inference
-            # TFLite models usually have batch size 1, so we process images one by one
-            xyz_x21s = []
-            hand_scores = []
-            left_hand_0_or_right_hand_1s = []
+        # TFLite Inference
+        # TFLite models usually have batch size 1, so we process images one by one
+        xyz_x21s = []
+        hand_scores = []
+        left_hand_0_or_right_hand_1s = []
 
-            input_details_tensor_index = self.input_details[0]['index']
-            input_dtype = self.input_details[0]['dtype']
+        input_details_tensor_index = self.input_details[0]['index']
+        input_dtype = self.input_details[0]['dtype']
+        
+        for i, inference_image in enumerate(inference_images):
+             # Prepare input data (Add batch dimension [1, 224, 224, 3])
+            inference_image = inference_image[np.newaxis, ...]
             
-            for i, inference_image in enumerate(inference_images):
-                 # Prepare input data (Add batch dimension [1, 224, 224, 3])
-                inference_image = inference_image[np.newaxis, ...]
-                
-                # Handle quantized models
-                if input_dtype == np.uint8 or input_dtype == np.int8:
-                    input_scale, input_zero_point = self.input_details[0]['quantization']
-                    inference_image = (inference_image / input_scale + input_zero_point).astype(input_dtype)
-                
-                self.interpreter.set_tensor(input_details_tensor_index, inference_image)
-                self.interpreter.invoke()
+            # Handle quantized models
+            if input_dtype == np.uint8 or input_dtype == np.int8:
+                input_scale, input_zero_point = self.input_details[0]['quantization']
+                inference_image = (inference_image / input_scale + input_zero_point).astype(input_dtype)
+            
+            self.interpreter.set_tensor(input_details_tensor_index, inference_image)
+            self.interpreter.invoke()
 
-                # Get outputs using identified indices
-                output_landmarks = self.interpreter.get_tensor(self.output_indices['landmarks'])
-                output_score = self.interpreter.get_tensor(self.output_indices['score'])
-                output_handedness = self.interpreter.get_tensor(self.output_indices['handedness'])
-                
-                xyz_x21s.append(output_landmarks[0])
-                hand_scores.append(output_score[0])
-                left_hand_0_or_right_hand_1s.append(output_handedness[0])
+            # Get outputs using identified indices
+            output_landmarks = self.interpreter.get_tensor(self.output_indices['landmarks'])
+            output_score = self.interpreter.get_tensor(self.output_indices['score'])
+            output_handedness = self.interpreter.get_tensor(self.output_indices['handedness'])
             
-            xyz_x21s = np.array(xyz_x21s)
-            hand_scores = np.array(hand_scores)
-            left_hand_0_or_right_hand_1s = np.array(left_hand_0_or_right_hand_1s)
+            xyz_x21s.append(output_landmarks[0])
+            hand_scores.append(output_score[0])
+            left_hand_0_or_right_hand_1s.append(output_handedness[0])
+        
+        xyz_x21s = np.array(xyz_x21s)
+        hand_scores = np.array(hand_scores)
+        left_hand_0_or_right_hand_1s = np.array(left_hand_0_or_right_hand_1s)
 
 
         hand_landmarks, rotated_image_size_leftrights = self.__postprocess(
@@ -178,13 +154,9 @@ class HandLandmark(object):
 
         temp_images = copy.deepcopy(images)
 
-        # Get input size from model
-        if self.use_onnx:
-            input_h = self.input_shapes[0][2]
-            input_w = self.input_shapes[0][3]
-        else:
-            input_h = self.input_shapes[0][1]
-            input_w = self.input_shapes[0][2]
+        # Get input size from model (TFLite uses NHWC)
+        input_h = self.input_shapes[0][1]
+        input_w = self.input_shapes[0][2]
 
         padded_images = []
         resized_images = []
@@ -212,10 +184,6 @@ class HandLandmark(object):
 
             padded_image = np.divide(padded_image, 255.0)
             padded_image = padded_image[..., ::-1] # BGR to RGB
-            
-            # ONNX expects NCHW, TFLite expects NHWC
-            if self.use_onnx:
-                padded_image = padded_image.transpose(swap)
             
             padded_image = np.ascontiguousarray(padded_image, dtype=np.float32)
 
@@ -263,13 +231,9 @@ class HandLandmark(object):
 
             rrn_lms = xyz_x21
             
-            # Input sizes for normalization
-            if self.use_onnx:
-                input_h = self.input_shapes[0][2]
-                input_w = self.input_shapes[0][3]
-            else:
-                input_h = self.input_shapes[0][1]
-                input_w = self.input_shapes[0][2]
+            # Input sizes for normalization (TFLite uses NHWC)
+            input_h = self.input_shapes[0][1]
+            input_w = self.input_shapes[0][2]
                 
             rrn_lms = rrn_lms / input_h
 

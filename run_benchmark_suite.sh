@@ -9,7 +9,7 @@
 #
 # This script:
 # 1. Prepares the system for benchmarking
-# 2. Runs the benchmark
+# 2. Runs the benchmark (benchmark.py handles 3x runs internally)
 # 3. Restores normal system settings
 # 4. Generates a summary report
 ################################################################################
@@ -47,7 +47,7 @@ fi
 
 echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║  Automated Benchmark Suite Runner     ║${NC}"
-echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "Configuration:"
 echo -e "  Benchmark script: ${BLUE}$BENCHMARK_SCRIPT${NC}"
@@ -91,6 +91,7 @@ sleep 5
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════${NC}"
 echo -e "${GREEN}Step 2: Running benchmark${NC}"
+echo -e "${GREEN}  (benchmark.py will run 3x internally)${NC}"
 echo -e "${GREEN}═══════════════════════════════════════${NC}"
 echo ""
 
@@ -98,7 +99,7 @@ START_TIME=$(date +%s)
 
 # Run benchmark with high priority
 echo -e "${BLUE}Starting benchmark with elevated priority...${NC}"
-nice -n -10 /home/pi/ia_env/bin/python "$BENCHMARK_SCRIPT" 2>&1 | tee benchmark_run.log
+nice -n -10 python3.9 "$BENCHMARK_SCRIPT" 2>&1 | tee benchmark_run.log
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
@@ -182,7 +183,7 @@ echo ""
 
 # Display quick stats if CSV exists
 if [ -f "$OUTPUT_CSV" ]; then
-    echo -e "${BLUE}Quick Stats (latest run):${NC}"
+    echo -e "${BLUE}Quick Stats (averaged from 3 runs):${NC}"
     echo "----------------------------------------"
 
     # Extract last line and parse
